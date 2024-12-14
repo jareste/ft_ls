@@ -31,7 +31,7 @@
 #define FLAG_u 0x00000100 /* use time of last access */
 #define FLAG_c 0x00000200 /* use time of last modification of the inode */
 
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 4096
 
 typedef struct t_file
 {

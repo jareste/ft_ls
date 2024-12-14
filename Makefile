@@ -9,11 +9,11 @@ RELEASE_CFLAGS = $(CFLAGS) -DNDEBUG
 #########
 
 #########
-FILES = ft_ls ft_malloc ft_list 
+FILES = ft_ls ft_malloc ft_list memcpy strcmp strlen
 
 SRC = $(addsuffix .c, $(FILES))
 
-vpath %.c srcs inc
+vpath %.c srcs inc inc/libutils
 #########
 
 #########
