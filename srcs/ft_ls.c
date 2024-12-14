@@ -36,6 +36,7 @@
 typedef struct t_file
 {
     char name[PATH_MAX];
+    size_t name_len;
     struct stat info;
 } t_file;
 
@@ -224,7 +225,7 @@ int get_max_name_length(t_file *files, int count)
     int max_length = 0;
     for (int i = 0; i < count; i++)
     {
-        int length = strlen(files[i].name);
+        int length = files[i].name_len;
         if (length > max_length)
         {
             max_length = length;
@@ -233,13 +234,14 @@ int get_max_name_length(t_file *files, int count)
     return max_length;
 }
 
-void calculate_field_widths(t_file *files, int count, int *link_width, int *owner_width, int *group_width, int *size_width)
-{
+void calculate_field_widths(t_file *files, int count, int *link_width, int *owner_width, int *group_width, int *size_width) {
     *link_width = *owner_width = *group_width = *size_width = 0;
 
     for (int i = 0; i < count; i++)
     {
-        int link_len = snprintf(NULL, 0, "%ld", files[i].info.st_nlink);
+        int link_count = files[i].info.st_nlink;
+        int link_len = 1;
+        while (link_count /= 10) link_len++;
         if (link_len > *link_width) *link_width = link_len;
 
         struct passwd *user = getpwuid(files[i].info.st_uid);
@@ -256,12 +258,14 @@ void calculate_field_widths(t_file *files, int count, int *link_width, int *owne
             if (group_len > *group_width) *group_width = group_len;
         }
 
-        int size_len = snprintf(NULL, 0, "%ld", files[i].info.st_size);
+        off_t file_size = files[i].info.st_size;
+        int size_len = 1;
+        while (file_size /= 10) size_len++;
         if (size_len > *size_width) *size_width = size_len;
     }
 }
 
-void display_files(t_file *files, int count, int flags)
+void display_files(t_file *files, int count, int flags, size_t max_name_length)
 {
     char permissions[11];
     char time_buffer[20];
@@ -293,20 +297,40 @@ void display_files(t_file *files, int count, int flags)
     else
     {
         struct winsize ws;
-        ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws);
+        ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws); // Get terminal width
 
-        int max_name_length = get_max_name_length(files, count);
-        int columns = ws.ws_col / (max_name_length + 2);
+        int columns = ws.ws_col / (max_name_length + 2); // Calculate number of columns
         if (columns == 0) columns = 1;
+
+        char buffer[BUFFER_SIZE];
+        int buffer_index = 0;
 
         for (int i = 0; i < count; i++)
         {
-            printf("%-*s", max_name_length + 2, files[i].name);
+            if (buffer_index + max_name_length + 2 >= BUFFER_SIZE)
+            {
+                write(STDOUT_FILENO, buffer, buffer_index);
+                buffer_index = 0;
+            }
+
+            memcpy(buffer + buffer_index, files[i].name, files[i].name_len);
+            buffer_index += files[i].name_len;
+
+            int padding = max_name_length + 2 - files[i].name_len;
+            for (int j = 0; j < padding; j++)
+            {
+                buffer[buffer_index++] = ' ';
+            }
 
             if ((i + 1) % columns == 0 || i == count - 1)
             {
-                printf("\n");
+                buffer[buffer_index++] = '\n';
             }
+        }
+
+        if (buffer_index > 0)
+        {
+            write(STDOUT_FILENO, buffer, buffer_index);
         }
     }
 }
@@ -343,6 +367,7 @@ void list_directory(const char *path, int options)
     char full_path[PATH_MAX];
     size_t path_len;
     size_t name_len;
+    size_t max_len = 0;
     int dirs_index;
     dirs_todo *dir_entries;
     if (options & FLAG_R)
@@ -357,8 +382,10 @@ void list_directory(const char *path, int options)
     memcpy(full_path, path, path_len);
 
     if (full_path[path_len - 1] != '/')
+    {
         full_path[path_len] = '/';
-
+        path_len++;
+    }
 
     while ((entry = readdir(dir)) != NULL)
     {
@@ -400,6 +427,11 @@ void list_directory(const char *path, int options)
         }
 
         memcpy(g_files[index].name, entry->d_name, strlen(entry->d_name) + 1);
+        g_files[index].name_len = name_len;
+        if (!(options & FLAG_l) && name_len > max_len)
+        {
+            max_len = name_len;
+        }
         g_files[index].info = file_stat;
         index++;
         if (index >= malloc_size)
@@ -414,7 +446,7 @@ void list_directory(const char *path, int options)
 
     merge_sort(g_files, 0, index - 1, options);    
 
-    display_files(g_files, index, options);
+    display_files(g_files, index, options, max_len);
 
     if (options & FLAG_R)
     {
