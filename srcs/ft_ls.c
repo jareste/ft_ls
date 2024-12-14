@@ -270,36 +270,113 @@ void display_files(t_file *files, int count, int flags, size_t max_name_length)
     char permissions[11];
     char time_buffer[20];
 
-    if (flags & FLAG_l) 
-    {
+    if (flags & FLAG_l) {
         int link_width, owner_width, group_width, size_width;
         calculate_field_widths(files, count, &link_width, &owner_width, &group_width, &size_width);
 
+        char buffer[BUFFER_SIZE];
+        char temp_buffer[20];
+
         for (int i = 0; i < count; i++)
         {
-            get_permissions(files[i].info.st_mode, permissions);
+            int buffer_index = 0;
 
-            struct passwd *user = getpwuid(files[i].info.st_uid);
+            get_permissions(files[i].info.st_mode, permissions);
+            memcpy(buffer + buffer_index, permissions, 10);
+            buffer_index += 10;
+            buffer[buffer_index++] = ' ';
+
+            long link_count = files[i].info.st_nlink;
+            int link_digits = 0;
+            long temp = link_count;
+            do
+            {
+                temp /= 10;
+                link_digits++;
+            } while (temp > 0);
+
+            for (int j = 0; j < link_width - link_digits; j++)
+            {
+                buffer[buffer_index++] = ' ';
+            }
+
+            for (int j = link_digits - 1; j >= 0; j--)
+            {
+                temp_buffer[j] = '0' + (link_count % 10);
+                link_count /= 10;
+            }
+            memcpy(buffer + buffer_index, temp_buffer, link_digits);
+            buffer_index += link_digits;
+            buffer[buffer_index++] = ' ';
+
+            if (!(flags & FLAG_g))
+            {
+                struct passwd *user = getpwuid(files[i].info.st_uid);
+                const char *owner_name = user ? user->pw_name : "";
+                size_t owner_len = strlen(owner_name);
+                memcpy(buffer + buffer_index, owner_name, owner_len);
+                buffer_index += owner_len;
+
+                for (unsigned long j = 0; j < owner_width - owner_len + 1; j++)
+                {
+                    buffer[buffer_index++] = ' ';
+                }
+            }
+
             struct group *group = getgrgid(files[i].info.st_gid);
+            const char *group_name = group ? group->gr_name : "UNKNOWN";
+            size_t group_len = strlen(group_name);
+            memcpy(buffer + buffer_index, group_name, group_len);
+            buffer_index += group_len;
+
+            for (unsigned long j = 0; j < group_width - group_len + 1; j++)
+            {
+                buffer[buffer_index++] = ' ';
+            }
+
+            long file_size = files[i].info.st_size;
+            int size_digits = 0;
+            temp = file_size;
+            do
+            {
+                temp /= 10;
+                size_digits++;
+            } while (temp > 0);
+
+            for (int j = 0; j < size_width - size_digits; j++)
+            {
+                buffer[buffer_index++] = ' ';
+            }
+
+            for (int j = size_digits - 1; j >= 0; j--)
+            {
+                temp_buffer[j] = '0' + (file_size % 10);
+                file_size /= 10;
+            }
+            memcpy(buffer + buffer_index, temp_buffer, size_digits);
+            buffer_index += size_digits;
+            buffer[buffer_index++] = ' ';
 
             format_time(files[i].info.st_mtime, time_buffer, sizeof(time_buffer));
+            size_t time_len = strlen(time_buffer);
+            memcpy(buffer + buffer_index, time_buffer, time_len);
+            buffer_index += time_len;
+            buffer[buffer_index++] = ' ';
 
-            printf("%s %*ld %-*s %-*s %*ld %s %s\n",
-                   permissions,
-                   link_width, files[i].info.st_nlink,
-                   (flags & FLAG_g) ? 0 : owner_width, (user ? user->pw_name : ""),
-                   group_width, (group ? group->gr_name : "UNKNOWN"),
-                   size_width, files[i].info.st_size,
-                   time_buffer,
-                   files[i].name);
+            memcpy(buffer + buffer_index, files[i].name, files[i].name_len);
+            buffer_index += files[i].name_len;
+
+            buffer[buffer_index++] = '\n';
+
+            write(STDOUT_FILENO, buffer, buffer_index);
         }
     }
     else
     {
         struct winsize ws;
-        ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws); // Get terminal width
+        ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws);
 
-        int columns = ws.ws_col / (max_name_length + 2); // Calculate number of columns
+        int columns = ws.ws_col / (max_name_length + 2);
         if (columns == 0) columns = 1;
 
         char buffer[BUFFER_SIZE];
@@ -349,7 +426,6 @@ void list_directory(const char *path, int options)
     DIR *dir = opendir(path);
     struct dirent *entry;
     struct stat file_stat;
-    // int dir_capacity = 10000;
 
     if (dir == NULL)
     {
