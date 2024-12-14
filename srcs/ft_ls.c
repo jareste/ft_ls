@@ -425,8 +425,6 @@ void display_files(t_file *files, int count, int flags, size_t max_name_length)
 
 void list_directory(const char *path, int options)
 {
-
-    // printf("options: %d|| flag_r set: %d\n", options, options & FLAG_R);
     if (access(path, F_OK) == -1)
     {
         write(2, "ft_ls: Cannot access '", 21);
@@ -558,7 +556,6 @@ void list_directory(const char *path, int options)
         free(dir_entries);
     }
 }
-
 
 int main(int argc, char **argv)
 {
