@@ -349,7 +349,7 @@ void list_directory(const char *path, int options)
     DIR *dir = opendir(path);
     struct dirent *entry;
     struct stat file_stat;
-    int dir_capacity = 10000;
+    // int dir_capacity = 10000;
 
     if (dir == NULL)
     {
@@ -368,14 +368,6 @@ void list_directory(const char *path, int options)
     size_t path_len;
     size_t name_len;
     size_t max_len = 0;
-    int dirs_index;
-    dirs_todo *dir_entries;
-    if (options & FLAG_R)
-    {
-        dirs_index = 0;
-        dir_entries = malloc(10000 * sizeof(dirs_todo));
-    }
-
 
     path_len = strlen(path);
 
@@ -409,23 +401,6 @@ void list_directory(const char *path, int options)
             continue;
         }
 
-        /* We have to do it recursive and actual one it's a dir?
-         * Store it into the dirs TODO list
-         */
-        if (options & FLAG_R && S_ISDIR(file_stat.st_mode))
-        {
-            memcpy(dir_entries[dirs_index].path, full_path, path_len + name_len + 1);
-            dir_entries[dirs_index].path[path_len + name_len] = '/';
-            dir_entries[dirs_index].path[path_len + name_len + 1] = '\0';
-            dir_entries[dirs_index].path_len = path_len + name_len + 1;
-            dirs_index++;
-            if (dirs_index >= dir_capacity)
-            {
-                dir_capacity += 10000;
-                dir_entries = realloc(dir_entries, sizeof(dirs_todo) * dir_capacity);
-            }
-        }
-
         memcpy(g_files[index].name, entry->d_name, strlen(entry->d_name) + 1);
         g_files[index].name_len = name_len;
         if (!(options & FLAG_l) && name_len > max_len)
@@ -450,6 +425,33 @@ void list_directory(const char *path, int options)
 
     if (options & FLAG_R)
     {
+        path_len = strlen(path);
+        int dir_capacity = 10000;
+        dirs_todo *dir_entries = malloc(dir_capacity * sizeof(dirs_todo));
+        int dirs_index = 0;
+
+        for (int i = 0; i < index; i++)
+        {
+            if (S_ISDIR(g_files[i].info.st_mode) &&
+                strcmp(g_files[i].name, ".") != 0 &&
+                strcmp(g_files[i].name, "..") != 0)
+            {
+
+                memcpy(dir_entries[dirs_index].path, path, path_len);
+                dir_entries[dirs_index].path[path_len] = '/';
+                memcpy(dir_entries[dirs_index].path + path_len + 1, g_files[i].name, g_files[i].name_len + 1);
+                dir_entries[dirs_index].path_len = path_len + g_files[i].name_len + 1;
+
+                dirs_index++;
+
+                if (dirs_index >= dir_capacity)
+                {
+                    dir_capacity += 10000;
+                    dir_entries = realloc(dir_entries, sizeof(dirs_todo) * dir_capacity);
+                }
+            }
+        }
+
         char buffer[BUFFER_SIZE];
         for (int i = 0; i < dirs_index; i++)
         {
@@ -459,11 +461,11 @@ void list_directory(const char *path, int options)
             len += dir_entries[i].path_len;
             buffer[len++] = ':';
             buffer[len++] = '\n';
-
             write(STDOUT_FILENO, buffer, len);
 
             list_directory(dir_entries[i].path, options);
         }
+        free(dir_entries);
     }
 }
 
