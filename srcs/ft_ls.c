@@ -104,6 +104,7 @@ int parse_args(int argc, char** argv)
                         options |= FLAG_t;
                         break;
                     case 'f':
+                        options |= FLAG_a;
                         options |= FLAG_f;
                         break;
                     case 'g':
@@ -118,6 +119,8 @@ int parse_args(int argc, char** argv)
                     case 'c':
                         options |= FLAG_c;
                         break;
+                    case '-':
+                        break;
                     default:
                         write(2, "ft_ls: illegal option -- ", 26);
                         write(2, &argv[i][j], 1);
@@ -129,6 +132,12 @@ int parse_args(int argc, char** argv)
         }
     }
     
+    if (options & FLAG_f)
+    {
+        options &= ~FLAG_l;
+        options &= ~FLAG_t;
+    }
+
     return options;
 }
 
@@ -505,14 +514,14 @@ void list_directory(const char *path, int options)
     }
 
     closedir(dir);
-
-    merge_sort(g_files, 0, index - 1, options);    
+    
+    if (!(options & FLAG_f))
+        merge_sort(g_files, 0, index - 1, options);    
 
     display_files(g_files, index, options, max_len);
 
     if (options & FLAG_R)
     {
-        printf("flag R\n");
         path_len = strlen(path);
         int dir_capacity = 10000;
         dirs_todo *dir_entries = malloc(dir_capacity * sizeof(dirs_todo));
