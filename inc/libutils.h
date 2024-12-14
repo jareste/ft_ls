@@ -10,4 +10,10 @@ size_t strlen (const char *str);
 #undef strcmp
 int strcmp (const char *p1, const char *p2);
 
+#undef tolower
+int tolower(int c);
+
+#undef strcasecmp
+int strcasecmp(const char *p1, const char *p2);
+
 #endif

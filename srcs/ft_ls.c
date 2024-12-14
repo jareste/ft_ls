@@ -31,7 +31,7 @@
 #define FLAG_u 0x00000100 /* use time of last access */
 #define FLAG_c 0x00000200 /* use time of last modification of the inode */
 
-#define BUFFER_SIZE 4096
+#define BUFFER_SIZE 1024
 
 typedef struct t_file
 {
@@ -134,7 +134,9 @@ int parse_args(int argc, char** argv)
 
 int compare_by_name(const t_file *a, const t_file *b)
 {
-    return strcmp(a->name, b->name);
+    int add_a = a->name[0] == '.';
+    int add_b = b->name[0] == '.';
+    return strcasecmp(a->name + add_a, b->name + add_b);
 }
 
 int compare_by_time(const t_file *a, const t_file *b, int flags)
@@ -270,7 +272,8 @@ void display_files(t_file *files, int count, int flags, size_t max_name_length)
     char permissions[11];
     char time_buffer[20];
 
-    if (flags & FLAG_l) {
+    if (flags & FLAG_l)
+    {
         int link_width, owner_width, group_width, size_width;
         calculate_field_widths(files, count, &link_width, &owner_width, &group_width, &size_width);
 
@@ -374,34 +377,42 @@ void display_files(t_file *files, int count, int flags, size_t max_name_length)
     else
     {
         struct winsize ws;
-        ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws);
+        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0)
+        {
+            ws.ws_col = 80;
+        }
 
-        int columns = ws.ws_col / (max_name_length + 2);
+        size_t column_width = max_name_length + 2;
+        int columns = ws.ws_col / column_width;
         if (columns == 0) columns = 1;
+
+        int rows = (count + columns - 1) / columns;
 
         char buffer[BUFFER_SIZE];
         int buffer_index = 0;
 
-        for (int i = 0; i < count; i++)
+        for (int row = 0; row < rows; row++)
         {
-            if (buffer_index + max_name_length + 2 >= BUFFER_SIZE)
+            for (int col = 0; col < columns; col++)
+            {
+                int index = col * rows + row;
+                if (index >= count) break;
+
+                memcpy(buffer + buffer_index, files[index].name, files[index].name_len);
+                buffer_index += files[index].name_len;
+
+                int padding = column_width - files[index].name_len;
+                for (int j = 0; j < padding; j++) {
+                    buffer[buffer_index++] = ' ';
+                }
+            }
+
+            buffer[buffer_index++] = '\n';
+
+            if ((unsigned long)buffer_index >= BUFFER_SIZE - column_width)
             {
                 write(STDOUT_FILENO, buffer, buffer_index);
                 buffer_index = 0;
-            }
-
-            memcpy(buffer + buffer_index, files[i].name, files[i].name_len);
-            buffer_index += files[i].name_len;
-
-            int padding = max_name_length + 2 - files[i].name_len;
-            for (int j = 0; j < padding; j++)
-            {
-                buffer[buffer_index++] = ' ';
-            }
-
-            if ((i + 1) % columns == 0 || i == count - 1)
-            {
-                buffer[buffer_index++] = '\n';
             }
         }
 
@@ -414,6 +425,8 @@ void display_files(t_file *files, int count, int flags, size_t max_name_length)
 
 void list_directory(const char *path, int options)
 {
+
+    // printf("options: %d|| flag_r set: %d\n", options, options & FLAG_R);
     if (access(path, F_OK) == -1)
     {
         write(2, "ft_ls: Cannot access '", 21);
@@ -501,6 +514,7 @@ void list_directory(const char *path, int options)
 
     if (options & FLAG_R)
     {
+        printf("flag R\n");
         path_len = strlen(path);
         int dir_capacity = 10000;
         dirs_todo *dir_entries = malloc(dir_capacity * sizeof(dirs_todo));
@@ -548,13 +562,14 @@ void list_directory(const char *path, int options)
 
 int main(int argc, char **argv)
 {
+    int options = 0;
     if (argc == 1)
     {
-        list_directory(".", 0);
+        list_directory(".", options);
         return 0;
     }
 
-    int options = parse_args(argc, argv);
+    options = parse_args(argc, argv);
 
     if (options == -1)
     {
