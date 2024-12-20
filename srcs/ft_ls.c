@@ -36,6 +36,7 @@
 typedef struct t_file
 {
     char name[PATH_MAX];
+    char name_orig[PATH_MAX];
     size_t name_len;
     struct stat info;
 } t_file;
@@ -52,11 +53,67 @@ typedef struct dirs
     size_t path_len;
 } dirs_todo;
 
+typedef struct {
+    uid_t uid;
+    char *name;
+} uid_cache_entry;
 
-t_file* g_files = NULL;
-int malloc_size = 500;
+typedef struct {
+    gid_t gid;
+    char *name;
+} gid_cache_entry;
 
-int parse_args(int argc, char** argv)
+static uid_cache_entry *uid_cache = NULL;
+static size_t uid_cache_count = 0;
+static size_t uid_cache_capacity = 0;
+
+static gid_cache_entry *gid_cache = NULL;
+static size_t gid_cache_count = 0;
+static size_t gid_cache_capacity = 0;
+
+
+static t_file* g_files = NULL;
+static int malloc_size = 10000;
+
+static int ignore_write;
+
+#define write(fd, str, len) do { ignore_write = write(fd, str, len); } while (0)
+
+#define OUTPUT_BUFFER_SIZE 8192
+static char output_buffer[OUTPUT_BUFFER_SIZE];
+static int output_index = 0;
+
+#ifndef UNBUFFERED_OUTPUT
+    static void flush_output()
+    {
+        if (output_index > 0)
+        {
+            write(STDOUT_FILENO, output_buffer, output_index);
+            output_index = 0;
+        }
+    }
+
+
+    static void buffered_write(const char *data, size_t len)
+    {
+        if (output_index + (int)len > OUTPUT_BUFFER_SIZE)
+        {
+            flush_output();
+        }
+        if (len > OUTPUT_BUFFER_SIZE)
+        {
+            write(STDOUT_FILENO, data, len);
+            return;
+        }
+        memcpy(output_buffer + output_index, data, len);
+        output_index += (int)len;
+    }
+#else
+    #define flush_output() void(0)
+    #define buffered_write(data, len) write(STDOUT_FILENO, data, len)
+#endif
+
+static int parse_args(int argc, char** argv)
 {
     int options = 0;
     int i;
@@ -141,14 +198,12 @@ int parse_args(int argc, char** argv)
     return options;
 }
 
-int compare_by_name(const t_file *a, const t_file *b)
+static int compare_by_name(const t_file *a, const t_file *b)
 {
-    int add_a = a->name[0] == '.';
-    int add_b = b->name[0] == '.';
-    return strcasecmp(a->name + add_a, b->name + add_b);
+    return strcmp(a->name, b->name);
 }
 
-int compare_by_time(const t_file *a, const t_file *b, int flags)
+static int compare_by_time(const t_file *a, const t_file *b, int flags)
 {
     time_t time_a = (flags & FLAG_u) ? a->info.st_atime :
                     (flags & FLAG_c) ? a->info.st_ctime :
@@ -167,9 +222,9 @@ int compare_by_time(const t_file *a, const t_file *b, int flags)
 /* TODO
  * Move it to top of the file
  */
-void merge(t_file *files, int left, int mid, int right, int flags);
+static void merge(t_file *files, int left, int mid, int right, int flags);
 
-void merge_sort(t_file *files, int left, int right, int flags)
+static void merge_sort(t_file *files, int left, int right, int flags)
 {
     if (left < right)
     {
@@ -180,7 +235,7 @@ void merge_sort(t_file *files, int left, int right, int flags)
     }
 }
 
-void merge(t_file *files, int left, int mid, int right, int flags)
+static void merge(t_file *files, int left, int mid, int right, int flags)
 {
     int n1 = mid - left + 1;
     int n2 = right - mid;
@@ -210,7 +265,7 @@ void merge(t_file *files, int left, int mid, int right, int flags)
     free(R);
 }
 
-void get_permissions(mode_t mode, char *buffer)
+static void get_permissions(mode_t mode, char *buffer)
 {
     buffer[0] = S_ISDIR(mode) ? 'd' : S_ISLNK(mode) ? 'l' : '-';
     buffer[1] = (mode & S_IRUSR) ? 'r' : '-';
@@ -225,27 +280,42 @@ void get_permissions(mode_t mode, char *buffer)
     buffer[10] = '\0';
 }
 
-void format_time(time_t file_time, char *buffer, size_t size)
+static void format_time(time_t file_time, char *buffer, size_t size)
 {
     struct tm *time_info = localtime(&file_time);
-    strftime(buffer, size, "%b %d %H:%M", time_info);
-}
+    static const char *months[] = {
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    };
 
-int get_max_name_length(t_file *files, int count)
-{
-    int max_length = 0;
-    for (int i = 0; i < count; i++)
+    if (size < 13)
     {
-        int length = files[i].name_len;
-        if (length > max_length)
-        {
-            max_length = length;
-        }
+        if (size > 0) buffer[0] = '\0';
+        return;
     }
-    return max_length;
+
+    const char *month = months[time_info->tm_mon];
+    int day = time_info->tm_mday;
+    int hour = time_info->tm_hour;
+    int minute = time_info->tm_min;
+
+    buffer[0] = month[0];
+    buffer[1] = month[1];
+    buffer[2] = month[2];
+    buffer[3] = ' ';
+    buffer[4] = '0' + (day / 10);
+    buffer[5] = '0' + (day % 10);
+    buffer[6] = ' ';
+    buffer[7] = '0' + (hour / 10);
+    buffer[8] = '0' + (hour % 10);
+    buffer[9] = ':';
+    buffer[10] = '0' + (minute / 10);
+    buffer[11] = '0' + (minute % 10);
+    buffer[12] = '\0';
 }
 
-void calculate_field_widths(t_file *files, int count, int *link_width, int *owner_width, int *group_width, int *size_width) {
+static void calculate_field_widths(t_file *files, int count, int *link_width, int *owner_width, int *group_width, int *size_width)
+{
     *link_width = *owner_width = *group_width = *size_width = 0;
 
     for (int i = 0; i < count; i++)
@@ -276,7 +346,75 @@ void calculate_field_widths(t_file *files, int count, int *link_width, int *owne
     }
 }
 
-void display_files(t_file *files, int count, int flags, size_t max_name_length)
+static void cache_uid_name(uid_t uid, const char *name)
+{
+    if (uid_cache_count == uid_cache_capacity)
+    {
+        uid_cache_capacity = uid_cache_capacity == 0 ? 64 : uid_cache_capacity * 2;
+        uid_cache = realloc(uid_cache, uid_cache_capacity * sizeof(uid_cache_entry));
+    }
+    uid_cache[uid_cache_count].uid = uid;
+    uid_cache[uid_cache_count].name = malloc(strlen(name) + 1);
+    strcpy(uid_cache[uid_cache_count].name, name);
+    uid_cache_count++;
+}
+
+static const char* get_uid_name(uid_t uid)
+{
+    for (size_t i = 0; i < uid_cache_count; i++)
+        if (uid_cache[i].uid == uid)
+            return uid_cache[i].name;
+
+    struct passwd *pw = getpwuid(uid);
+    if (!pw)
+        return "";
+    cache_uid_name(uid, pw->pw_name);
+    return pw->pw_name;
+}
+
+static void cache_gid_name(gid_t gid, const char *name)
+{
+    if (gid_cache_count == gid_cache_capacity)
+    {
+        gid_cache_capacity = gid_cache_capacity == 0 ? 64 : gid_cache_capacity * 2;
+        gid_cache = realloc(gid_cache, gid_cache_capacity * sizeof(gid_cache_entry));
+    }
+    gid_cache[gid_cache_count].gid = gid;
+    int len = strlen(name) + 1;
+    gid_cache[gid_cache_count].name = malloc(len);
+    memcpy(gid_cache[gid_cache_count].name, name, len);
+    gid_cache_count++;
+}
+
+static const char* get_gid_name(gid_t gid)
+{
+    for (size_t i = 0; i < gid_cache_count; i++)
+        if (gid_cache[i].gid == gid)
+            return gid_cache[i].name;
+
+    struct group *gr = getgrgid(gid);
+    if (!gr)
+        return "UNKNOWN";
+
+    cache_gid_name(gid, gr->gr_name);
+    return gr->gr_name;
+}
+
+static void free_caches()
+{
+    for (size_t i = 0; i < uid_cache_count; i++)
+    {
+        free(uid_cache[i].name);
+    }
+    for (size_t i = 0; i < gid_cache_count; i++)
+    {
+        free(gid_cache[i].name);
+    }
+    free(uid_cache);
+    free(gid_cache);
+}
+
+static void display_files(t_file *files, int count, int flags, size_t max_name_length)
 {
     char permissions[11];
     char time_buffer[20];
@@ -323,8 +461,7 @@ void display_files(t_file *files, int count, int flags, size_t max_name_length)
 
             if (!(flags & FLAG_g))
             {
-                struct passwd *user = getpwuid(files[i].info.st_uid);
-                const char *owner_name = user ? user->pw_name : "";
+                const char *owner_name = (flags & FLAG_g) ? "" : get_uid_name(files[i].info.st_uid);
                 size_t owner_len = strlen(owner_name);
                 memcpy(buffer + buffer_index, owner_name, owner_len);
                 buffer_index += owner_len;
@@ -335,8 +472,8 @@ void display_files(t_file *files, int count, int flags, size_t max_name_length)
                 }
             }
 
-            struct group *group = getgrgid(files[i].info.st_gid);
-            const char *group_name = group ? group->gr_name : "UNKNOWN";
+            const char *group_name = get_gid_name(files[i].info.st_gid);
+
             size_t group_len = strlen(group_name);
             memcpy(buffer + buffer_index, group_name, group_len);
             buffer_index += group_len;
@@ -375,12 +512,12 @@ void display_files(t_file *files, int count, int flags, size_t max_name_length)
             buffer_index += time_len;
             buffer[buffer_index++] = ' ';
 
-            memcpy(buffer + buffer_index, files[i].name, files[i].name_len);
+            memcpy(buffer + buffer_index, files[i].name_orig, files[i].name_len);
             buffer_index += files[i].name_len;
 
             buffer[buffer_index++] = '\n';
 
-            write(STDOUT_FILENO, buffer, buffer_index);
+            buffered_write(buffer, buffer_index);
         }
     }
     else
@@ -407,7 +544,7 @@ void display_files(t_file *files, int count, int flags, size_t max_name_length)
                 int index = col * rows + row;
                 if (index >= count) break;
 
-                memcpy(buffer + buffer_index, files[index].name, files[index].name_len);
+                memcpy(buffer + buffer_index, files[index].name_orig, files[index].name_len);
                 buffer_index += files[index].name_len;
 
                 int padding = column_width - files[index].name_len;
@@ -420,7 +557,7 @@ void display_files(t_file *files, int count, int flags, size_t max_name_length)
 
             if ((unsigned long)buffer_index >= BUFFER_SIZE - column_width)
             {
-                write(STDOUT_FILENO, buffer, buffer_index);
+                buffered_write(buffer, buffer_index);
                 buffer_index = 0;
             }
         }
@@ -432,7 +569,16 @@ void display_files(t_file *files, int count, int flags, size_t max_name_length)
     }
 }
 
-void list_directory(const char *path, int options)
+static void to_lowercase(char *str)
+{
+    for (; *str; str++) {
+        if (*str >= 'A' && *str <= 'Z') {
+            *str = *str + ('a' - 'A');
+        }
+    }
+}
+
+static void list_directory(const char *path, int options)
 {
     if (access(path, F_OK) == -1)
     {
@@ -446,6 +592,7 @@ void list_directory(const char *path, int options)
     DIR *dir = opendir(path);
     struct dirent *entry;
     struct stat file_stat;
+    bool need_stat = (options & FLAG_l) || (options & FLAG_t) || (options & FLAG_R);
 
     if (dir == NULL)
     {
@@ -485,25 +632,34 @@ void list_directory(const char *path, int options)
         name_len = strlen(entry->d_name);
         
 
-        memcpy(full_path + path_len, entry->d_name, strlen(entry->d_name) + 1);
+        memcpy(full_path + path_len, entry->d_name, name_len + 1);
         full_path[path_len + name_len] = '\0';
-
-        if (lstat(full_path, &file_stat) == -1)
+        if (need_stat)
         {
-            write(2, "ft_ls: Cannot stat file '", 25);
-            write(2, full_path, strlen(full_path));
-            write(2, "': ", 3);
-            perror("");
-            continue;
+            if (lstat(full_path, &file_stat) == -1)
+            {
+                write(2, "ft_ls: Cannot stat file '", 25);
+                write(2, full_path, strlen(full_path));
+                write(2, "': ", 3);
+                perror("");
+                continue;
+            }
         }
 
-        memcpy(g_files[index].name, entry->d_name, strlen(entry->d_name) + 1);
+        memcpy(g_files[index].name, entry->d_name, name_len + 1);
+        memcpy(g_files[index].name_orig, entry->d_name, name_len + 1);
+        
+        to_lowercase(g_files[index].name);
+
         g_files[index].name_len = name_len;
         if (!(options & FLAG_l) && name_len > max_len)
         {
             max_len = name_len;
         }
-        g_files[index].info = file_stat;
+        
+        if (need_stat)
+            g_files[index].info = file_stat;
+
         index++;
         if (index >= malloc_size)
         {
@@ -536,7 +692,8 @@ void list_directory(const char *path, int options)
 
                 memcpy(dir_entries[dirs_index].path, path, path_len);
                 dir_entries[dirs_index].path[path_len] = '/';
-                memcpy(dir_entries[dirs_index].path + path_len + 1, g_files[i].name, g_files[i].name_len + 1);
+                memcpy(dir_entries[dirs_index].path + path_len + 1, g_files[i].name_orig, g_files[i].name_len + 1);
+                dir_entries[dirs_index].path[path_len + g_files[i].name_len + 1] = '\0';
                 dir_entries[dirs_index].path_len = path_len + g_files[i].name_len + 1;
 
                 dirs_index++;
@@ -558,7 +715,8 @@ void list_directory(const char *path, int options)
             len += dir_entries[i].path_len;
             buffer[len++] = ':';
             buffer[len++] = '\n';
-            write(STDOUT_FILENO, buffer, len);
+
+            buffered_write(buffer, len);
 
             list_directory(dir_entries[i].path, options);
         }
@@ -572,6 +730,8 @@ int main(int argc, char **argv)
     if (argc == 1)
     {
         list_directory(".", options);
+        flush_output();
+        free(g_files);
         return 0;
     }
 
@@ -598,6 +758,9 @@ int main(int argc, char **argv)
         list_directory(".", options);
     }
 
+    flush_output();
+
+    free_caches();
     free(g_files);
     return 0;
 }
