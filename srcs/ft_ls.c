@@ -200,6 +200,7 @@ static int parse_args(int argc, char** argv)
     return options;
 }
 
+#ifdef USE_MERGE_SORT
 static int compare_by_name(const t_file *a, const t_file *b)
 {
     return strcmp(a->name, b->name);
@@ -266,6 +267,52 @@ static void merge(t_file *files, int left, int mid, int right, int flags)
     free(L);
     free(R);
 }
+#else
+int g_sort_flags = 0;
+
+static int compare_files(const void *a, const void *b, int flags)
+{
+    const t_file *file_a = (const t_file *)a;
+    const t_file *file_b = (const t_file *)b;
+
+    int cmp;
+    if (flags & FLAG_t)
+    {
+        time_t time_a = (flags & FLAG_u) ? file_a->info.st_atime :
+                        (flags & FLAG_c) ? file_a->info.st_ctime :
+                        file_a->info.st_mtime;
+        time_t time_b = (flags & FLAG_u) ? file_b->info.st_atime :
+                        (flags & FLAG_c) ? file_b->info.st_ctime :
+                        file_b->info.st_mtime;
+
+        if (time_a > time_b)
+            cmp = -1;
+        else if (time_a < time_b)
+            cmp = 1;
+        else
+            cmp = strcmp(file_a->name, file_b->name);
+    }
+    else
+    {
+        cmp = strcmp(file_a->name, file_b->name);
+    }
+
+    return (flags & FLAG_r) ? -cmp : cmp;
+}
+
+static int qsort_comparator(const void *a, const void *b)
+{
+    extern int g_sort_flags;
+    return compare_files(a, b, g_sort_flags);
+}
+
+void sort_files(t_file *files, int count, int flags)
+{
+    extern int g_sort_flags;
+    g_sort_flags = flags;
+    qsort(files, count, sizeof(t_file), qsort_comparator);
+}
+#endif
 
 static void get_permissions(mode_t mode, char *buffer)
 {
@@ -666,9 +713,14 @@ static void list_directory(const char *path, int options)
     }
 
     closedir(dir);
-    
+
+#ifdef USE_MERGE_SORT
     if (!(options & FLAG_f))
-        merge_sort(g_files, 0, index - 1, options);    
+        merge_sort(g_files, 0, index - 1, options);
+#else
+    if (!(options & FLAG_f))
+        sort_files(g_files, index, options);
+#endif
 
     display_files(g_files, index, options, max_len);
 
