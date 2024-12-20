@@ -670,7 +670,11 @@ static void list_directory(const char *path, int options)
             }
         }
 
-        memcpy(g_files[index].name, entry->d_name, name_len + 1);
+        if (entry->d_name[0] == '.')
+            memcpy(g_files[index].name, entry->d_name +1, name_len + 1);
+        else
+            memcpy(g_files[index].name, entry->d_name, name_len + 1);
+
         memcpy(g_files[index].name_orig, entry->d_name, name_len + 1);
         
         to_lowercase(g_files[index].name);
