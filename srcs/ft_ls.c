@@ -1,22 +1,16 @@
 #include <stdio.h>
-
-
 #include <string.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <limits.h>
-
 #include <stdlib.h>
 #include <errno.h>
 #include <unistd.h>
-
 #include <pwd.h>
 #include <grp.h>
 #include <time.h>
-
 #include <sys/ioctl.h>
-
-
+#include <fcntl.h>
 #include <ft_list.h>
 
 #define FLAG_l 0x00000001 /* long format */
@@ -55,12 +49,12 @@ typedef struct dirs
 
 typedef struct {
     uid_t uid;
-    char *name;
+    char name[LOGIN_NAME_MAX];
 } uid_cache_entry;
 
 typedef struct {
     gid_t gid;
-    char *name;
+    char name[LOGIN_NAME_MAX];
 } gid_cache_entry;
 
 static uid_cache_entry *uid_cache = NULL;
@@ -403,8 +397,7 @@ static void cache_uid_name(uid_t uid, const char *name)
         uid_cache = realloc(uid_cache, uid_cache_capacity * sizeof(uid_cache_entry));
     }
     uid_cache[uid_cache_count].uid = uid;
-    uid_cache[uid_cache_count].name = malloc(strlen(name) + 1);
-    strcpy(uid_cache[uid_cache_count].name, name);
+    memcpy(uid_cache[uid_cache_count].name, name, strlen(name) + 1);
     uid_cache_count++;
 }
 
@@ -429,9 +422,7 @@ static void cache_gid_name(gid_t gid, const char *name)
         gid_cache = realloc(gid_cache, gid_cache_capacity * sizeof(gid_cache_entry));
     }
     gid_cache[gid_cache_count].gid = gid;
-    int len = strlen(name) + 1;
-    gid_cache[gid_cache_count].name = malloc(len);
-    memcpy(gid_cache[gid_cache_count].name, name, len);
+    memcpy(gid_cache[gid_cache_count].name, name, strlen(name) + 1);
     gid_cache_count++;
 }
 
@@ -451,14 +442,6 @@ static const char* get_gid_name(gid_t gid)
 
 static void free_caches()
 {
-    for (size_t i = 0; i < uid_cache_count; i++)
-    {
-        free(uid_cache[i].name);
-    }
-    for (size_t i = 0; i < gid_cache_count; i++)
-    {
-        free(gid_cache[i].name);
-    }
     free(uid_cache);
     free(gid_cache);
 }
@@ -668,9 +651,7 @@ static void list_directory(const char *path, int options)
     while ((entry = readdir(dir)) != NULL)
     {
         if (entry->d_name[0] == '.' && !(options & FLAG_a))
-        {
             continue;
-        }
 
         name_len = strlen(entry->d_name);
         
@@ -679,7 +660,7 @@ static void list_directory(const char *path, int options)
         full_path[path_len + name_len] = '\0';
         if (need_stat)
         {
-            if (lstat(full_path, &file_stat) == -1)
+            if (fstatat(dirfd(dir), entry->d_name, &file_stat, AT_SYMLINK_NOFOLLOW) == -1)
             {
                 write(2, "ft_ls: Cannot stat file '", 25);
                 write(2, full_path, strlen(full_path));
@@ -727,7 +708,7 @@ static void list_directory(const char *path, int options)
     if (options & FLAG_R)
     {
         path_len = strlen(path);
-        int dir_capacity = 10000;
+        int dir_capacity = 100;
         dirs_todo *dir_entries = malloc(dir_capacity * sizeof(dirs_todo));
         int dirs_index = 0;
 
@@ -748,7 +729,7 @@ static void list_directory(const char *path, int options)
 
                 if (dirs_index >= dir_capacity)
                 {
-                    dir_capacity += 10000;
+                    dir_capacity += 1000;
                     dir_entries = realloc(dir_entries, sizeof(dirs_todo) * dir_capacity);
                 }
             }
@@ -807,7 +788,6 @@ int main(int argc, char **argv)
 
     set_g_ws_cols(options);
 
-    printf("options: %d\n", options);
     bool called_once = false;
 
     for (int i = 1; i < argc; i++)
