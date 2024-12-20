@@ -77,6 +77,8 @@ static int malloc_size = 10000;
 
 static int ignore_write;
 
+static int g_ws_cols;
+
 #define write(fd, str, len) do { ignore_write = write(fd, str, len); } while (0)
 
 #define OUTPUT_BUFFER_SIZE 8192
@@ -522,14 +524,8 @@ static void display_files(t_file *files, int count, int flags, size_t max_name_l
     }
     else
     {
-        struct winsize ws;
-        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0)
-        {
-            ws.ws_col = 80;
-        }
-
         size_t column_width = max_name_length + 2;
-        int columns = ws.ws_col / column_width;
+        int columns = g_ws_cols / column_width;
         if (columns == 0) columns = 1;
 
         int rows = (count + columns - 1) / columns;
@@ -564,7 +560,7 @@ static void display_files(t_file *files, int count, int flags, size_t max_name_l
 
         if (buffer_index > 0)
         {
-            write(STDOUT_FILENO, buffer, buffer_index);
+            buffered_write(buffer, buffer_index);
         }
     }
 }
@@ -724,11 +720,26 @@ static void list_directory(const char *path, int options)
     }
 }
 
+void set_g_ws_cols(int options)
+{
+    if (options & FLAG_l)
+    {
+        return;
+    }
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0)
+    {
+        ws.ws_col = 80;
+    }
+    g_ws_cols = ws.ws_col;
+}
+
 int main(int argc, char **argv)
 {
     int options = 0;
     if (argc == 1)
     {
+        set_g_ws_cols(options);
         list_directory(".", options);
         flush_output();
         free(g_files);
@@ -742,6 +753,9 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    set_g_ws_cols(options);
+
+    printf("options: %d\n", options);
     bool called_once = false;
 
     for (int i = 1; i < argc; i++)
