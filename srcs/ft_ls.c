@@ -33,6 +33,7 @@ typedef struct t_file
     char name_orig[PATH_MAX];
     size_t name_len;
     struct stat info;
+    char link_target[PATH_MAX];
 } t_file;
 
 typedef enum
@@ -75,11 +76,11 @@ static int g_ws_cols;
 
 #define write(fd, str, len) do { ignore_write = write(fd, str, len); } while (0)
 
+#ifndef UNBUFFERED_OUTPUT
 #define OUTPUT_BUFFER_SIZE 8192
 static char output_buffer[OUTPUT_BUFFER_SIZE];
 static int output_index = 0;
 
-#ifndef UNBUFFERED_OUTPUT
     static void flush_output()
     {
         if (output_index > 0)
@@ -105,7 +106,7 @@ static int output_index = 0;
         output_index += (int)len;
     }
 #else
-    #define flush_output() void(0)
+    #define flush_output() do {} while (0)
     #define buffered_write(data, len) write(STDOUT_FILENO, data, len)
 #endif
 
@@ -131,7 +132,7 @@ static int parse_args(int argc, char** argv)
             write(1, "  -d  list directories themselves, not their contents\n", 54);
             write(1, "  -u  with -lt: sort by, and show, access time\n", 48);
             write(1, "  -c  with -lt: sort by, and show, change time\n", 47);
-            return -1;
+            return 0;
         }
 
         if (argv[i][0] == '-')
@@ -162,6 +163,7 @@ static int parse_args(int argc, char** argv)
                         break;
                     case 'g':
                         options |= FLAG_g;
+                        options |= FLAG_l;
                         break;
                     case 'd':
                         options |= FLAG_d;
@@ -175,9 +177,10 @@ static int parse_args(int argc, char** argv)
                     case '-':
                         break;
                     default:
-                        write(2, "ft_ls: illegal option -- ", 26);
+                        write(2, "ft_ls: invalid option -- ", 26);
                         write(2, &argv[i][j], 1);
                         write(2, "\n", 1);
+                        write(2, "Try 'ft_ls --help' for more information.\n", 42);
                         return -1;
                 }
                 j++;
@@ -547,6 +550,9 @@ static void display_files(t_file *files, int count, int flags, size_t max_name_l
             memcpy(buffer + buffer_index, files[i].name_orig, files[i].name_len);
             buffer_index += files[i].name_len;
 
+            if (files[i].link_target[0] != '\0')
+                buffer_index += snprintf(buffer + buffer_index, BUFFER_SIZE - buffer_index, " -> %s", files[i].link_target);
+
             buffer[buffer_index++] = '\n';
 
             buffered_write(buffer, buffer_index);
@@ -604,7 +610,7 @@ static void to_lowercase(char *str)
     }
 }
 
-static void list_directory(const char *path, int options)
+static bool open_directory(const char *path, DIR **dir)
 {
     if (access(path, F_OK) == -1)
     {
@@ -612,22 +618,26 @@ static void list_directory(const char *path, int options)
         write(2, path, strlen(path));
         write(2, "': ", 3);
         perror("");
-        return;
+        return false;
     }
 
-    DIR *dir = opendir(path);
-    struct dirent *entry;
-    struct stat file_stat;
-    bool need_stat = (options & FLAG_l) || (options & FLAG_t) || (options & FLAG_R);
-
-    if (dir == NULL)
+    *dir = opendir(path);
+    if (*dir == NULL)
     {
         write(2, "ft_ls: Cannot open directory '", 29);
         write(2, path, strlen(path));
         write(2, "': ", 3);
         perror("");
-        return;
+        return false;
     }
+    return true;
+}
+
+static void list_directory(const char *path, int options, DIR* dir)
+{
+    struct dirent *entry;
+    struct stat file_stat;
+    bool need_stat = (options & FLAG_l) || (options & FLAG_t) || (options & FLAG_R);
 
     if (g_files == NULL)
         g_files = malloc(malloc_size * sizeof(t_file));
@@ -655,7 +665,6 @@ static void list_directory(const char *path, int options)
 
         name_len = strlen(entry->d_name);
         
-
         memcpy(full_path + path_len, entry->d_name, name_len + 1);
         full_path[path_len + name_len] = '\0';
         if (need_stat)
@@ -668,10 +677,28 @@ static void list_directory(const char *path, int options)
                 perror("");
                 continue;
             }
+
+            if (S_ISLNK(file_stat.st_mode))
+            {
+                ssize_t link_len = readlink(full_path, g_files[index].link_target, PATH_MAX);
+                if (link_len == -1)
+                {
+                    write(2, "ft_ls: Cannot read link '", 25);
+                    write(2, full_path, strlen(full_path));
+                    write(2, "': ", 3);
+                    perror("");
+                    continue;
+                }
+                g_files[index].link_target[link_len] = '\0';
+            }
+            else
+            {
+                g_files[index].link_target[0] = '\0';
+            }
         }
 
-        if (entry->d_name[0] == '.')
-            memcpy(g_files[index].name, entry->d_name +1, name_len + 1);
+        if (entry->d_name[0] == '.' && entry->d_name[1] != '\0')
+            memcpy(g_files[index].name, entry->d_name + 1, name_len);
         else
             memcpy(g_files[index].name, entry->d_name, name_len + 1);
 
@@ -742,6 +769,12 @@ static void list_directory(const char *path, int options)
         char buffer[BUFFER_SIZE];
         for (int i = 0; i < dirs_index; i++)
         {
+            DIR* subdir;
+            if (!open_directory(dir_entries[i].path, &subdir))
+            {
+                continue;
+            }
+
             int len = 0;
             buffer[len++] = '\n';
             memcpy(buffer + len, dir_entries[i].path, dir_entries[i].path_len);
@@ -750,8 +783,8 @@ static void list_directory(const char *path, int options)
             buffer[len++] = '\n';
 
             buffered_write(buffer, len);
-
-            list_directory(dir_entries[i].path, options);
+            
+            list_directory(dir_entries[i].path, options, subdir);
         }
         free(dir_entries);
     }
@@ -774,10 +807,12 @@ void set_g_ws_cols(int options)
 int main(int argc, char **argv)
 {
     int options = 0;
+    DIR *dir;
     if (argc == 1)
     {
         set_g_ws_cols(options);
-        list_directory(".", options);
+        if (open_directory(".", &dir))
+            list_directory(".", options, dir);
         flush_output();
         free(g_files);
         return 0;
@@ -793,19 +828,44 @@ int main(int argc, char **argv)
     set_g_ws_cols(options);
 
     bool called_once = false;
+    bool more_than_one = false;
+
+    for (int i =1; i < argc; i++)
+    {
+        if (argv[i][0] != '-')
+        {
+            if (called_once)
+            {
+                more_than_one = true;
+                break;
+            }
+            called_once = true;
+        }
+    }
+
+    called_once = false;
 
     for (int i = 1; i < argc; i++)
     {
         if (argv[i][0] != '-')
         {
             called_once = true;
-            list_directory(argv[i], options);
+            if (open_directory(argv[i], &dir))
+            {
+                if (more_than_one)
+                {
+                    buffered_write(argv[i], strlen(argv[i]));
+                    buffered_write(":\n", 2);
+                }
+                list_directory(argv[i], options, dir);
+            }
         }
     }
 
     if (!called_once)
     {
-        list_directory(".", options);
+        if (open_directory(".", &dir))
+            list_directory(".", options, dir);
     }
 
     flush_output();
